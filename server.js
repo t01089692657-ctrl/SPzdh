@@ -50,9 +50,10 @@ jobs.register("edit", "edit", async (job, { setProgress }) => {
   const payload = job.payload || {};
   const workDir = ensureDir(path.join(config.uploadDir, "edit", job.id));
   setProgress("正在接收素材", 5);
+  const mediaOptions = { outputDir: config.outputDir, localHosts: localOutputHosts() };
   const clipItems = [...(payload.clips || []), ...(payload.generatedVideos || [])];
-  const clips = await saveMediaInputs(clipItems, workDir, "clip");
-  const references = await saveMediaInputs(payload.referenceVideos || [], workDir, "reference");
+  const clips = await saveMediaInputs(clipItems, workDir, "clip", mediaOptions);
+  const references = await saveMediaInputs(payload.referenceVideos || [], workDir, "reference", mediaOptions);
   if (!clips.length) throw httpError(400, "请先上传至少一个素材视频，或先生成一个视频结果。");
 
   const outputDir = ensureDir(path.join(config.outputDir, "edit"));
@@ -469,4 +470,12 @@ function lanAddresses() {
     }
   }
   return list;
+}
+
+// 允许作为“同源 /outputs”本地读取的主机名：本机地址 + 所有局域网网卡地址。
+function localOutputHosts() {
+  const hosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (!["0.0.0.0", "::"].includes(config.host)) hosts.add(config.host);
+  for (const address of lanAddresses()) hosts.add(address);
+  return [...hosts];
 }
