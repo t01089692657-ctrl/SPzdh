@@ -1,0 +1,14 @@
+{
+  "name": "ai-video-platform",
+  "version": "2.0.0",
+  "description": "AI 视频创作平台（公司内部多人版）：参考视频拆解、产品分析、可灵/即梦生成、内置 ffmpeg 智能剪辑",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

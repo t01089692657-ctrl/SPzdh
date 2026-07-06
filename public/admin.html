@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>管理后台 - AI 视频创作平台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.2v13.6L19 12 8 5.2Zm-5 2.3A4.5 4.5 0 0 1 7.5 3h9A4.5 4.5 0 0 1 21 7.5v9a4.5 4.5 0 0 1-4.5 4.5h-9A4.5 4.5 0 0 1 3 16.5v-9Z"/></svg>
+      </div>
+      <span>管理后台</span>
+      <span class="sub">AI 视频创作平台</span>
+    </div>
+    <div class="user-box">
+      <button class="link-btn" id="backBtn" type="button">← 返回工作台</button>
+      <span class="avatar-dot" id="avatarInitial">?</span>
+      <span class="user-name" id="userName">加载中...</span>
+      <button class="link-btn" id="logoutBtn" type="button">退出</button>
+    </div>
+  </header>
+
+  <main class="admin-grid">
+    <section class="card">
+      <h2 style="display:flex;justify-content:space-between;align-items:center;">
+        <span>依赖与引擎状态</span>
+        <button class="btn ghost" id="refreshStatusBtn" type="button" style="height:34px;">重新检测</button>
+      </h2>
+      <div class="status-grid" id="statusGrid">
+        <div class="status-item"><div class="name">正在检测...</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>用户管理</h2>
+      <form class="form-inline" id="addUserForm" style="margin-bottom:16px;">
+        <div class="auth-field">
+          <label>用户名</label>
+          <input id="newUsername" type="text" required />
+        </div>
+        <div class="auth-field">
+          <label>姓名/昵称</label>
+          <input id="newDisplayName" type="text" />
+        </div>
+        <div class="auth-field">
+          <label>初始密码</label>
+          <input id="newPassword" type="text" required minlength="6" placeholder="至少 6 位" />
+        </div>
+        <div class="auth-field">
+          <label>角色</label>
+          <select id="newRole">
+            <option value="member">员工</option>
+            <option value="admin">管理员</option>
+          </select>
+        </div>
+        <button class="btn primary" type="submit" style="height:40px;">添加账号</button>
+      </form>
+      <div class="table-scroll">
+        <table class="data" id="userTable">
+          <thead>
+            <tr><th>用户名</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 style="display:flex;justify-content:space-between;align-items:center;">
+        <span>任务监控（全部用户）</span>
+        <button class="btn ghost" id="refreshJobsBtn" type="button" style="height:34px;">刷新</button>
+      </h2>
+      <div class="table-scroll">
+        <table class="data" id="jobTable">
+          <thead>
+            <tr><th>任务</th><th>类型</th><th>提交人</th><th>状态</th><th>进度</th><th>提交时间</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" style="max-width:520px;">
+      <h2>修改我的密码</h2>
+      <form id="passwordForm">
+        <div class="auth-field">
+          <label>当前密码</label>
+          <input id="oldPassword" type="password" autocomplete="current-password" required />
+        </div>
+        <div class="auth-field">
+          <label>新密码</label>
+          <input id="newSelfPassword" type="password" autocomplete="new-password" required minlength="6" />
+        </div>
+        <button class="btn primary" type="submit">更新密码</button>
+        <span class="muted" id="passwordMsg" style="margin-left:10px;font-size:13px;"></span>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, options);
+      if (response.status === 401) {
+        location.href = "/login.html";
+        throw new Error("请先登录。");
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || "接口调用失败。");
+      return data;
+    }
+
+    const post = (url, payload) => api(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    });
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+    }
+
+    function pillHtml(ok, okText, badText, warn = false) {
+      const cls = ok ? "ok" : warn ? "warn" : "bad";
+      return `<span class="pill ${cls}">${escapeHtml(ok ? okText : badText)}</span>`;
+    }
+
+    async function loadMe() {
+      const data = await api("/api/auth/me");
+      if (data.user.role !== "admin") {
+        location.href = "/index.html";
+        return;
+      }
+      $("userName").textContent = data.user.displayName || data.user.username;
+      $("avatarInitial").textContent = (data.user.displayName || data.user.username).slice(0, 1).toUpperCase();
+    }
+
+    async function loadStatus(force = false) {
+      $("statusGrid").innerHTML = '<div class="status-item"><div class="name">正在检测...</div></div>';
+      try {
+        const data = await api(`/api/status${force ? "?refresh=1" : ""}`);
+        const items = [];
+        items.push(statusItem("服务器", true, `${data.server.platform} · Node ${data.server.node}<br>监听 ${data.server.host}:${data.server.port}`));
+        items.push(statusItem("视觉分析 API", data.analysis.configured,
+          data.analysis.configured
+            ? `${escapeHtml(data.analysis.baseUrl)}<br>模型 ${escapeHtml(data.analysis.model)}`
+            : "未配置 API Key。请在 config.json 的 analysis.apiKey 或环境变量 SAKAI_API_KEY 配置。"));
+        items.push(statusItem("剪辑引擎 ffmpeg", data.media.available,
+          data.media.available
+            ? `${escapeHtml(data.media.version || "版本未知")}<br>来源：${escapeHtml(data.media.source)}<br>${data.media.xfade ? "支持交叉淡化转场" : "不支持 xfade，将用黑场转场"}`
+            : "未找到 ffmpeg。查看 deps/README.md 安装。"));
+        items.push(statusItem("OpenMontage（可选）", data.media.openMontage,
+          data.media.openMontage ? "已找到，剪辑时可优先使用" : "未安装。不影响使用：剪辑走内置 ffmpeg 引擎。", !data.media.openMontage));
+        items.push(statusItem("可灵（快手）", data.engines.kling.authenticated,
+          data.engines.kling.authenticated
+            ? `已登录，可用模型 ${data.engines.kling.textToVideoModels.length} 个`
+            : `不可用：${escapeHtml(data.engines.kling.error || "kling CLI 未安装或未登录")}`));
+        items.push(statusItem("即梦（字节）", data.engines.jimeng.configured,
+          data.engines.jimeng.configured
+            ? `已登录，余额 ${escapeHtml(String(data.engines.jimeng.total_credit || "未知"))}`
+            : `不可用：${escapeHtml(data.engines.jimeng.error || "dreamina CLI 未安装或未登录")}`));
+        items.push(statusItem("Codex CLI（可选）", data.engines.codex.installed,
+          data.engines.codex.installed ? escapeHtml(data.engines.codex.version || "已安装") : "未安装。不影响其他功能。", !data.engines.codex.installed));
+        const queues = Object.entries(data.queues || {}).map(([lane, info]) => `${lane}：执行中 ${info.running}，排队 ${info.queued}`).join("<br>");
+        items.push(statusItem("任务队列", true, queues || "空闲"));
+        $("statusGrid").innerHTML = items.join("");
+      } catch (error) {
+        $("statusGrid").innerHTML = `<div class="status-item"><div class="name">检测失败</div><div class="detail">${escapeHtml(error.message)}</div></div>`;
+      }
+    }
+
+    function statusItem(name, ok, detailHtml, warn = false) {
+      return `<div class="status-item"><div class="name">${escapeHtml(name)}${pillHtml(ok, "正常", warn ? "未启用" : "异常", warn)}</div><div class="detail">${detailHtml}</div></div>`;
+    }
+
+    async function loadUsers() {
+      const data = await api("/api/admin/users");
+      $("userTable").querySelector("tbody").innerHTML = data.users.map((user) => `
+        <tr>
+          <td><strong>${escapeHtml(user.username)}</strong></td>
+          <td>${escapeHtml(user.displayName || "-")}</td>
+          <td>${user.role === "admin" ? "管理员" : "员工"}</td>
+          <td>${user.disabled ? '<span class="pill bad">已停用</span>' : '<span class="pill ok">正常</span>'}</td>
+          <td class="muted">${escapeHtml((user.createdAt || "").slice(0, 10))}</td>
+          <td>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn" data-reset="${escapeHtml(user.username)}" type="button" style="height:30px;font-size:12px;">重置密码</button>
+              <button class="btn" data-toggle="${escapeHtml(user.username)}" data-disabled="${user.disabled ? "0" : "1"}" type="button" style="height:30px;font-size:12px;">${user.disabled ? "启用" : "停用"}</button>
+              <button class="btn danger-ghost" data-remove="${escapeHtml(user.username)}" type="button" style="height:30px;font-size:12px;">删除</button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    const JOB_TYPE_NAMES = {
+      kling: "可灵生成",
+      jimeng: "即梦生成",
+      edit: "智能剪辑",
+      codex_reference: "Codex 拆解",
+      codex_product: "Codex 产品分析"
+    };
+
+    const JOB_STATUS = {
+      queued: ["排队中", "warn"],
+      running: ["执行中", "warn"],
+      done: ["完成", "ok"],
+      failed: ["失败", "bad"],
+      interrupted: ["已中断", "bad"]
+    };
+
+    async function loadJobs() {
+      const data = await api("/api/jobs?all=1");
+      const rows = data.jobs.map((job) => {
+        const [statusText, statusCls] = JOB_STATUS[job.status] || [job.status, "warn"];
+        return `
+        <tr>
+          <td class="muted" style="font-size:12px;">${escapeHtml(job.id)}${job.meta?.title ? `<br><strong style="color:var(--ink);font-size:13px;">${escapeHtml(job.meta.title)}</strong>` : ""}</td>
+          <td>${escapeHtml(JOB_TYPE_NAMES[job.type] || job.type)}</td>
+          <td>${escapeHtml(job.owner)}</td>
+          <td><span class="pill ${statusCls}">${escapeHtml(statusText)}</span>${job.error ? `<div class="muted" style="font-size:12px;max-width:260px;">${escapeHtml(job.error.slice(0, 160))}</div>` : ""}</td>
+          <td class="muted">${escapeHtml(job.progress?.stage || "")} ${job.progress?.percent ?? 0}%</td>
+          <td class="muted" style="font-size:12px;">${escapeHtml((job.createdAt || "").replace("T", " ").slice(0, 19))}</td>
+        </tr>`;
+      });
+      $("jobTable").querySelector("tbody").innerHTML = rows.join("") || '<tr><td colspan="6" class="muted">还没有任务记录。</td></tr>';
+    }
+
+    $("addUserForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await post("/api/admin/users", {
+          username: $("newUsername").value.trim(),
+          displayName: $("newDisplayName").value.trim(),
+          password: $("newPassword").value,
+          role: $("newRole").value
+        });
+        $("newUsername").value = "";
+        $("newDisplayName").value = "";
+        $("newPassword").value = "";
+        await loadUsers();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    $("userTable").addEventListener("click", async (event) => {
+      const reset = event.target.closest("[data-reset]");
+      const toggle = event.target.closest("[data-toggle]");
+      const remove = event.target.closest("[data-remove]");
+      try {
+        if (reset) {
+          const password = prompt(`给用户 ${reset.dataset.reset} 设置新密码（至少 6 位）：`);
+          if (!password) return;
+          await post(`/api/admin/users/${encodeURIComponent(reset.dataset.reset)}/password`, { password });
+          alert("密码已重置。");
+        }
+        if (toggle) {
+          await post(`/api/admin/users/${encodeURIComponent(toggle.dataset.toggle)}/disable`, { disabled: toggle.dataset.disabled === "1" });
+          await loadUsers();
+        }
+        if (remove) {
+          if (!confirm(`确认删除用户 ${remove.dataset.remove} 吗？其历史记录文件会保留在服务器 data/records/ 下。`)) return;
+          await api(`/api/admin/users/${encodeURIComponent(remove.dataset.remove)}`, { method: "DELETE" });
+          await loadUsers();
+        }
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    $("passwordForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      $("passwordMsg").textContent = "";
+      try {
+        await post("/api/auth/password", {
+          oldPassword: $("oldPassword").value,
+          newPassword: $("newSelfPassword").value
+        });
+        $("passwordMsg").textContent = "已更新 ✓";
+        $("oldPassword").value = "";
+        $("newSelfPassword").value = "";
+      } catch (error) {
+        $("passwordMsg").textContent = error.message;
+      }
+    });
+
+    $("refreshStatusBtn").addEventListener("click", () => loadStatus(true));
+    $("refreshJobsBtn").addEventListener("click", loadJobs);
+    $("backBtn").addEventListener("click", () => location.href = "/index.html");
+    $("logoutBtn").addEventListener("click", async () => {
+      try { await post("/api/auth/logout"); } catch {}
+      location.href = "/login.html";
+    });
+
+    loadMe().then(() => {
+      loadStatus();
+      loadUsers();
+      loadJobs();
+    }).catch(() => {});
+  </script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 视频创作平台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.2v13.6L19 12 8 5.2Zm-5 2.3A4.5 4.5 0 0 1 7.5 3h9A4.5 4.5 0 0 1 21 7.5v9a4.5 4.5 0 0 1-4.5 4.5h-9A4.5 4.5 0 0 1 3 16.5v-9Z"/></svg>
+      </div>
+      <span>AI 视频创作平台</span>
+      <span class="sub">公司内部版</span>
+    </div>
+    <div class="user-box">
+      <button class="link-btn hidden" id="adminLink" type="button">管理后台</button>
+      <span class="avatar-dot" id="avatarInitial">?</span>
+      <span class="user-name" id="userName">加载中...</span>
+      <button class="link-btn" id="logoutBtn" type="button">退出</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <button class="nav-item active" data-view="workspace" type="button"><span class="nav-icon">▣</span>创作工作台</button>
+      <button class="nav-item" data-view="history" type="button"><span class="nav-icon">◷</span>历史记录</button>
+      <button class="nav-item" data-view="projects" type="button"><span class="nav-icon">▢</span>我的项目</button>
+    </aside>
+
+    <main class="workspace" id="workspace">
+      <section class="card creator-card col-3">
+        <h2><span class="step-num">1</span>参考视频</h2>
+        <label class="upload-box" id="referenceDrop">
+          <input id="referenceFile" type="file" accept="video/*,image/*" />
+          <div class="upload-copy">
+            <div class="upload-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 6.5A2.5 2.5 0 0 1 5.5 4h7.2l2 2H19a2 2 0 0 1 2 2v9.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Zm8 4v5l4-2.5-4-2.5Z"/></svg>
+            </div>
+            <div class="upload-title">点击上传或拖拽参考视频</div>
+            <div class="upload-sub">支持 mp4 / mov / 长图脚本</div>
+          </div>
+          <div class="preview" id="referencePreview"></div>
+        </label>
+        <textarea id="referenceNotes" placeholder="可补充参考视频的爆点、节奏、你想模仿的地方..." style="margin-top:12px;"></textarea>
+        <div class="btn-row">
+          <button class="btn ghost" id="analyzeReferenceBtn" type="button">拆解脚本</button>
+          <button class="btn" id="useReferenceBtn" type="button">使用拆解</button>
+          <button class="btn" id="codexReferenceBtn" type="button">交给Codex</button>
+        </div>
+        <div class="analysis" id="referenceAnalysis">上传参考视频后，点击“拆解脚本”查看结构。</div>
+      </section>
+
+      <section class="card creator-card col-3">
+        <h2><span class="step-num">2</span>产品信息</h2>
+        <p class="section-label">产品图片 <span class="muted" id="imageCount">(0/6)</span></p>
+        <div class="product-strip">
+          <label class="upload-box small">
+            <input id="productImages" type="file" accept="image/*" multiple />
+            <div>
+              <div style="font-size:30px;color:#64748b;line-height:1;">＋</div>
+              <div class="upload-sub">上传图片</div>
+            </div>
+          </label>
+          <div class="thumbs" id="productImagePreview">
+            <div class="thumb more-thumb">预览</div>
+            <div class="thumb more-thumb">图片</div>
+            <div class="thumb more-thumb">›</div>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn ghost" id="analyzeProductBtn" type="button">分析产品图片</button>
+          <button class="btn" id="useProductBtn" type="button">填入产品描述</button>
+          <button class="btn" id="codexProductBtn" type="button">交给Codex</button>
+        </div>
+        <div class="analysis" id="productAnalysis">上传产品图片后，点击“分析产品图片”。</div>
+
+        <p class="section-label" style="margin-top:16px;">产品描述</p>
+        <textarea id="productInfo" maxlength="300" placeholder="请输入产品名称、特点、卖点、使用场景等信息..."></textarea>
+        <div class="counter"><span id="descCount">0</span>/300</div>
+      </section>
+
+      <section class="card creator-card col-3">
+        <h2><span class="step-num">3</span>数字人</h2>
+        <label class="digital-preview" id="avatarBox">
+          <input id="avatarFile" class="hidden" type="file" accept="image/*,video/*" />
+          <div class="person-placeholder" id="personPlaceholder"></div>
+          <div class="preview" id="avatarPreview"></div>
+        </label>
+        <button class="btn" id="changeAvatarBtn" type="button" style="width:100%;margin-top:12px;">更换数字人</button>
+        <input id="avatarPersona" type="text" placeholder="数字人人设：如专业外贸女销售、工程师、测评人..." style="margin-top:10px;height:40px;padding:0 11px;" />
+      </section>
+
+      <section class="card creator-card col-3">
+        <h2><span class="step-num">4</span>发布平台<span class="muted" style="font-size:12.5px;font-weight:600;">（可多选）</span></h2>
+        <div class="platform-list">
+          <label class="platform"><span class="app-icon douyin">♪</span>抖音<input type="checkbox" name="platform" value="抖音" checked /></label>
+          <label class="platform"><span class="app-icon shipin">视</span>视频号<input type="checkbox" name="platform" value="视频号" checked /></label>
+          <label class="platform"><span class="app-icon douyin">♪</span>TikTok<input type="checkbox" name="platform" value="TikTok" /></label>
+          <label class="platform"><span class="app-icon youtube">▶</span>YouTube<input type="checkbox" name="platform" value="YouTube" /></label>
+          <label class="platform"><span class="app-icon red">RED</span>小红书<input type="checkbox" name="platform" value="小红书" /></label>
+          <label class="platform"><span class="app-icon custom"></span>自定义平台<input type="checkbox" name="platform" value="自定义平台" /></label>
+        </div>
+      </section>
+
+      <section class="card creator-card col-3">
+        <h2>创作设置</h2>
+        <div class="setting-row">
+          <label>视频时长</label>
+          <select id="duration">
+            <option value="15">15秒</option>
+            <option value="10">10秒</option>
+            <option value="5">5秒</option>
+            <option value="30">30秒</option>
+            <option value="45">45秒</option>
+            <option value="60">60秒</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>视频比例</label>
+          <select id="ratio">
+            <option value="9:16">9:16（竖屏）</option>
+            <option value="16:9">16:9（横屏）</option>
+            <option value="1:1">1:1（方形）</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>视频风格</label>
+          <select id="style">
+            <option value="根据参考视频智能匹配">根据参考视频智能匹配</option>
+            <option value="工厂信任感">工厂信任感</option>
+            <option value="产品测评">产品测评</option>
+            <option value="剧情种草">剧情种草</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>生成引擎</label>
+          <select id="engine">
+            <option value="mock">本地模拟（不消耗额度）</option>
+            <option value="kling">可灵真实生成</option>
+            <option value="jimeng">即梦真实生成</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>可灵模型</label>
+          <select id="klingModel">
+            <option value="kling-video-v3_0_turbo">kling-video-v3_0_turbo</option>
+            <option value="kling-video-v3_0">kling-video-v3_0</option>
+            <option value="kling-video-v3_0_omni">kling-video-v3_0_omni</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>即梦模型</label>
+          <select id="jimengModel">
+            <option value="seedance2.0fast">seedance2.0fast</option>
+            <option value="seedance2.0">seedance2.0</option>
+            <option value="seedance2.0_vip">seedance2.0_vip</option>
+            <option value="seedance2.0fast_vip">seedance2.0fast_vip</option>
+            <option value="seedance2.0mini">seedance2.0mini</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>清晰度</label>
+          <select id="resolution">
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+          </select>
+        </div>
+        <div class="script-control">
+          <label class="section-label" for="scriptMode">脚本来源</label>
+          <select id="scriptMode">
+            <option value="auto">自动重写：参考拆解 + 产品信息</option>
+            <option value="analysis">直接使用拆解脚本</option>
+            <option value="product">只按产品信息重写</option>
+          </select>
+        </div>
+        <button class="btn primary full" id="startBtn" type="button">✦ 开始创作</button>
+        <div class="pill-row" id="enginePills"></div>
+        <div class="status-line" id="engineStatus">正在检测生成引擎...</div>
+      </section>
+
+      <section class="card result-card creator-card col-6">
+        <h2>生成结果</h2>
+        <div class="result-box" id="result">
+          <div class="empty-video">
+            <svg class="clap" viewBox="0 0 100 86" aria-hidden="true"><path fill="currentColor" d="M18 25h64a6 6 0 0 1 6 6v43a6 6 0 0 1-6 6H18a6 6 0 0 1-6-6V31a6 6 0 0 1 6-6Zm26 16v24l20-12-20-12ZM19 9l62-8 3 18-62 8-3-18Z"/></svg>
+            <div>AI 生成的视频将显示在这里</div>
+          </div>
+        </div>
+        <div class="progress">
+          <div class="bar"><span id="progressBar"></span></div>
+          <div class="progress-meta"><span id="stageText">等待开始</span><span id="percentText">0%</span></div>
+        </div>
+        <button class="btn full" id="saveProjectBtn" type="button" style="margin-top:12px;">保存到我的项目</button>
+        <div class="script-output hidden" id="scriptOutput"></div>
+      </section>
+
+      <section class="card creator-card col-3">
+        <h2>智能剪辑</h2>
+        <p class="section-label">素材视频 <span class="muted" id="editClipCount">(0/8)</span></p>
+        <label class="upload-box small">
+          <input id="editClips" type="file" accept="video/*" multiple />
+          <div>
+            <div style="font-size:30px;color:#64748b;line-height:1;">＋</div>
+            <div class="upload-sub">上传生成素材/补充镜头</div>
+          </div>
+        </label>
+        <div class="analysis" id="editClipPreview">上传多个视频素材后，可一键拼接、统一规格并加转场。</div>
+        <div class="setting-row" style="margin-top:14px;">
+          <label>转场</label>
+          <select id="editTransition">
+            <option value="crossfade">交叉淡入淡出</option>
+            <option value="cut">硬切</option>
+            <option value="fade">黑场淡入淡出</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>转场时长</label>
+          <select id="editTransitionDuration">
+            <option value="0.35">0.35 秒</option>
+            <option value="0.5">0.5 秒</option>
+            <option value="0.8">0.8 秒</option>
+          </select>
+        </div>
+        <button class="btn primary full" id="openMontageBtn" type="button">开始智能剪辑</button>
+        <div class="status-line" id="openMontageStatus">参考视频会用于节奏参考；素材视频负责最终剪辑。</div>
+      </section>
+
+      <section class="library-view hidden" id="historyView">
+        <div class="library-head">
+          <div>
+            <h2>历史记录</h2>
+            <div class="muted">保存在服务器上，换台电脑登录也能看到；可一键加载回工作台。</div>
+          </div>
+          <button class="btn danger-ghost" id="clearHistoryBtn" type="button">清空历史</button>
+        </div>
+        <div class="library-list" id="historyList"></div>
+      </section>
+
+      <section class="library-view hidden" id="projectsView">
+        <div class="library-head">
+          <div>
+            <h2>我的项目</h2>
+            <div class="muted">手动保存的重要项目会放在这里，适合后续继续改脚本和生成。</div>
+          </div>
+          <button class="btn danger-ghost" id="clearProjectsBtn" type="button">清空项目</button>
+        </div>
+        <div class="library-list" id="projectList"></div>
+      </section>
+    </main>
+  </div>
+
+  <canvas id="renderCanvas" width="720" height="1280" class="hidden"></canvas>
+
+  <script src="/app.js"></script>
+</body>
+</html>

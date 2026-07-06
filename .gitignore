@@ -1,0 +1,10 @@
+# 运行时数据（含用户账号、上传素材、生成结果）
+data/
+config.json
+*.log
+
+# 大体积依赖二进制不进 git（打包分发时会带上）
+deps/bin/
+
+node_modules/
+.DS_Store

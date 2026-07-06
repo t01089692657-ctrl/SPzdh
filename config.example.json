@@ -1,0 +1,32 @@
+{
+  "host": "0.0.0.0",
+  "port": 8781,
+  "analysis": {
+    "apiKey": "",
+    "baseUrl": "https://sakai.my",
+    "model": "gpt-5.5"
+  },
+  "openMontageRoot": "",
+  "ffmpegPath": "",
+  "ffprobePath": "",
+  "commands": {
+    "kling": "kling",
+    "dreamina": "dreamina",
+    "codex": "codex",
+    "python": "",
+    "dreaminaViaWsl": true
+  },
+  "session": {
+    "ttlHours": 72
+  },
+  "registration": {
+    "inviteCode": ""
+  },
+  "editor": {
+    "preferOpenMontage": true
+  },
+  "limits": {
+    "bodyLimitMb": 120,
+    "jobHistory": 200
+  }
+}
