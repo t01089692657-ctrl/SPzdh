@@ -14,7 +14,8 @@
     "dreamina": "dreamina",
     "codex": "codex",
     "python": "",
-    "dreaminaViaWsl": true
+    "dreaminaViaWsl": true,
+    "codexEnabled": false
   },
   "session": {
     "ttlHours": 72

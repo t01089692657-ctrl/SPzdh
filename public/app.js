@@ -116,6 +116,23 @@ $("adminLink").addEventListener("click", () => {
   location.href = "/admin.html";
 });
 
+$("passwordLink").addEventListener("click", async () => {
+  const oldPassword = prompt("请输入当前密码：");
+  if (!oldPassword) return;
+  const newPassword = prompt("请输入新密码（至少 6 位）：");
+  if (!newPassword) return;
+  if (newPassword.length < 6) {
+    alert("新密码至少 6 位。");
+    return;
+  }
+  try {
+    await postJson("/api/auth/password", { oldPassword, newPassword });
+    alert("密码已修改。");
+  } catch (error) {
+    alert(error.message || "修改密码失败。");
+  }
+});
+
 // ---------------- 任务轮询 ----------------
 
 async function submitJob(type, payload, title) {
@@ -124,9 +141,9 @@ async function submitJob(type, payload, title) {
 }
 
 async function waitForJob(jobId, onProgress, { intervalMs = 3000, maxMinutes = 20 } = {}) {
-  const deadline = Date.now() + maxMinutes * 60 * 1000;
+  // 排队等待不计入超时预算：只有任务真正“执行中”后才开始倒计时，避免排在别人后面被误判失败。
+  let runDeadline = null;
   for (;;) {
-    if (Date.now() > deadline) throw new Error("等待任务超时，请稍后在服务器上查看任务状态。");
     await sleep(intervalMs);
     const data = await getJson(`/api/jobs/${jobId}`);
     const job = data.job;
@@ -134,6 +151,10 @@ async function waitForJob(jobId, onProgress, { intervalMs = 3000, maxMinutes = 2
     if (job.status === "done") return job.result || {};
     if (job.status === "failed" || job.status === "interrupted") {
       throw new Error(job.error || "任务执行失败。");
+    }
+    if (job.status === "running") {
+      if (runDeadline === null) runDeadline = Date.now() + maxMinutes * 60 * 1000;
+      if (Date.now() > runDeadline) throw new Error("任务执行超时，请稍后在“历史记录”或管理后台查看结果。");
     }
   }
 }
@@ -467,14 +488,15 @@ function makeScript() {
   ].join("\n");
 }
 
-function makeVideoPrompt(scriptText) {
+function makeVideoPrompt(scriptText, useImages) {
   return [
     `Create a vertical ${$("ratio").value} social commerce video for ${getPlatforms().join(", ")}.`,
     `Style: ${$("style").value}.`,
     `Digital human/persona: ${$("avatarPersona").value.trim() || "professional presenter"}.`,
     `Product information: ${$("productInfo").value.trim()}.`,
-    state.productImages.length ? `Use ${state.productImages.length} uploaded product images as product visual references.` : "",
-    state.referenceFiles.length ? `Use uploaded reference material for pacing and structure. Type: ${state.referenceKind}.` : "",
+    // 只有真正会把图片喂给模型的引擎(即梦多模态)才在 prompt 里声称使用了图片
+    useImages && state.productImages.length ? `Use ${state.productImages.length} uploaded product images as product visual references.` : "",
+    useImages && state.referenceFiles.length ? `Use uploaded reference material for pacing and structure. Type: ${state.referenceKind}.` : "",
     "Avoid fake logos, unreadable text, deformed faces or hands.",
     "Script:",
     scriptText
@@ -482,15 +504,17 @@ function makeVideoPrompt(scriptText) {
 }
 
 async function callRealEngine(engine, scriptText) {
+  // 可灵目前走文生视频，不消费上传图片/视频；即梦多模态才用。按引擎裁剪 payload，避免白传大文件、prompt 也不谎称用图。
+  const isMultimodal = engine === "jimeng";
   const payload = {
-    prompt: makeVideoPrompt(scriptText),
+    prompt: makeVideoPrompt(scriptText, isMultimodal),
     model: $("klingModel").value,
     jimengModel: $("jimengModel").value,
     duration: $("duration").value,
     resolution: $("resolution").value,
     ratio: $("ratio").value,
-    productImages: state.productImages,
-    referenceVideos: state.referenceKind === "video" ? state.referenceFiles : []
+    productImages: isMultimodal ? state.productImages : [],
+    referenceVideos: isMultimodal && state.referenceKind === "video" ? state.referenceFiles : []
   };
   const job = await submitJob(engine, payload, getProductName($("productInfo").value.trim() || "视频生成"));
   return waitForJob(job.id, (stage, percent) => setProgress(stage, Math.max(88, percent)), { maxMinutes: 15 });
@@ -561,9 +585,13 @@ async function renderMockResult(scriptText) {
 // ---------------- 智能剪辑 ----------------
 
 async function runEdit() {
-  const generatedVideos = /^(https?:\/\/|\/outputs\/)/i.test(state.resultUrl)
-    ? [{ url: new URL(state.resultUrl, location.origin).href, name: "generated-result.mp4", type: "video/mp4" }]
-    : [];
+  // /outputs/ 结果按相对路径传给后端（后端直接读本地文件，跨主机名/IP 都稳，也避开 SSRF 拦截）；
+  // 远程 https 结果（可灵/即梦原始链接）按原样传，后端会做安全下载。
+  const generatedVideos = /^\/outputs\//i.test(state.resultUrl)
+    ? [{ url: state.resultUrl, name: "generated-result.mp4", type: "video/mp4" }]
+    : /^https?:\/\//i.test(state.resultUrl)
+      ? [{ url: state.resultUrl, name: "generated-result.mp4", type: "video/mp4" }]
+      : [];
   if (!state.editClips.length && !generatedVideos.length) {
     $("openMontageStatus").textContent = "请先上传素材视频，或先生成一个真实视频结果。";
     return;
@@ -588,8 +616,8 @@ async function runEdit() {
     const notes = (data.notes || []).join("；");
     $("result").innerHTML = `<div><video src="${escapeHtml(data.url)}" controls playsinline></video><div class="download-row"><a class="btn primary" href="${escapeHtml(data.url)}" target="_blank" rel="noreferrer">预览/打开剪辑视频</a><a class="btn" href="${escapeHtml(data.url)}" download="智能剪辑结果.mp4">下载剪辑视频</a></div></div>`;
     $("openMontageStatus").textContent = `剪辑完成${data.duration ? `：约 ${Math.round(data.duration)} 秒` : ""}${notes ? `（${notes}）` : ""}`;
+    // 只自动进历史；「我的项目」保留给用户手动保存，避免两处都堆满自动记录
     await saveRecord("history");
-    await saveRecord("projects");
   } catch (error) {
     $("openMontageStatus").textContent = error.message || "剪辑失败。";
   } finally {
@@ -759,8 +787,8 @@ async function startGeneration() {
       const data = await callRealEngine(engine, scriptText);
       renderRemoteResult(data, scriptText);
     }
+    // 只自动进历史；「我的项目」保留给用户手动保存
     await saveRecord("history");
-    await saveRecord("projects");
     setProgress("已完成", 100);
   } catch (error) {
     $("result").innerHTML = `<div class="empty-video" style="color:var(--danger);">${escapeHtml(error.message)}</div>`;
@@ -786,14 +814,19 @@ async function loadEngineStatus() {
       $("klingModel").innerHTML = models.map((item) => `<option value="${escapeHtml(item.model)}">${escapeHtml(item.model)}${item.alias ? "｜" + escapeHtml(item.alias) : ""}</option>`).join("");
       if (models.some((item) => item.model === "kling-video-v3_0_turbo")) $("klingModel").value = "kling-video-v3_0_turbo";
     }
+    const codexOn = data.codex?.enabled && data.engines?.codex?.installed;
     const pills = [
       pill(data.analysis?.configured ? "拆解分析可用" : "拆解分析未配置", !!data.analysis?.configured),
       pill(data.engines?.kling?.authenticated ? "可灵已登录" : "可灵不可用", data.engines?.kling?.authenticated ? true : false),
       pill(data.engines?.jimeng?.configured ? "即梦已登录" : "即梦不可用", data.engines?.jimeng?.configured ? true : false),
       pill(data.media?.available ? "剪辑引擎就绪" : "剪辑引擎缺 ffmpeg", data.media?.available ? true : false),
-      pill(data.engines?.codex?.installed ? "Codex 可用" : "Codex 未安装", data.engines?.codex?.installed ? true : "warn")
+      pill(codexOn ? "Codex 可用" : "Codex 未启用", codexOn ? true : "warn")
     ];
     $("enginePills").innerHTML = pills.join("");
+    // Codex 未启用时隐藏“交给Codex”按钮，避免点了才报错
+    if (!codexOn) {
+      document.querySelectorAll("#codexReferenceBtn, #codexProductBtn").forEach((btn) => btn.classList.add("hidden"));
+    }
     const jimengCredit = data.engines?.jimeng?.total_credit ? `，即梦余额 ${data.engines.jimeng.total_credit}` : "";
     $("engineStatus").textContent = `真实生成会消耗公司账号的平台额度${jimengCredit}。遇到引擎不可用请联系管理员。`;
   } catch (error) {
@@ -807,8 +840,9 @@ $("referenceFile").addEventListener("change", handleReferenceChange);
 $("productImages").addEventListener("change", handleProductImages);
 $("editClips").addEventListener("change", handleEditClips);
 $("productInfo").addEventListener("input", updateDescCount);
+// avatarBox 本身是 <label> 包着 file input，点击区域内任意处会原生触发文件框；
+// 只有 label 外的“更换数字人”按钮需要 JS 转发点击（否则会弹出两次文件框）。
 $("changeAvatarBtn").addEventListener("click", () => $("avatarFile").click());
-$("avatarBox").addEventListener("click", () => $("avatarFile").click());
 $("avatarFile").addEventListener("change", handleAvatarChange);
 $("analyzeReferenceBtn").addEventListener("click", analyzeReference);
 $("useReferenceBtn").addEventListener("click", useReferenceAnalysis);

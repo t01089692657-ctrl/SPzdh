@@ -9,15 +9,15 @@ else
   echo "[缺失] Node.js —— 必装！Ubuntu/Debian: sudo apt install -y nodejs npm"
 fi
 
-ARCH_DIR="$(uname -s | tr 'A-Z' 'a-z')-x64"
-if [ -x "bin/linux-x64/ffmpeg" ] || command -v ffmpeg >/dev/null 2>&1; then
-  if command -v ffmpeg >/dev/null 2>&1; then
-    echo "[正常] ffmpeg（系统 PATH，$(ffmpeg -version 2>/dev/null | head -1 | cut -d' ' -f3)）"
-  else
-    echo "[正常] ffmpeg（随包附带 deps/bin/linux-x64）"
-  fi
+case "$(uname -s)" in Linux) OS=linux ;; Darwin) OS=darwin ;; *) OS=linux ;; esac
+case "$(uname -m)" in x86_64|amd64) A=x64 ;; arm64|aarch64) A=arm64 ;; *) A=x64 ;; esac
+ARCH_DIR="${OS}-${A}"
+if command -v ffmpeg >/dev/null 2>&1; then
+  echo "[正常] ffmpeg（系统 PATH，$(ffmpeg -version 2>/dev/null | head -1 | cut -d' ' -f3)）"
+elif [ -x "bin/${ARCH_DIR}/ffmpeg" ]; then
+  echo "[正常] ffmpeg（随包附带 deps/bin/${ARCH_DIR}）"
 else
-  echo "[缺失] ffmpeg —— 智能剪辑不可用。运行 ./get-ffmpeg.sh 补装"
+  echo "[缺失] ffmpeg（本平台 ${ARCH_DIR}）—— 智能剪辑不可用。运行 ./get-ffmpeg.sh 补装"
 fi
 
 command -v kling >/dev/null 2>&1 && echo "[正常] kling CLI 已安装" || echo "[可选] kling CLI 未安装 —— 可灵真实生成不可用"

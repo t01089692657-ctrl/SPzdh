@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { pipeline } = require("stream");
 
 const { loadConfig, root } = require("./lib/config");
 const { sendJson, readJsonBody, mimeFor, safeChildPath, ensureDir, randomId } = require("./lib/utils");
@@ -18,6 +19,14 @@ ensureDir(config.dataDir);
 ensureDir(config.uploadDir);
 ensureDir(config.outputDir);
 
+// 兜底：任何漏网的异步异常/未处理 Promise 都只记录日志，绝不让整台服务（含内存任务队列）崩掉下线。
+process.on("uncaughtException", (error) => {
+  console.error("[uncaughtException]", error);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+
 const auth = new Auth(config);
 const records = new Records(config);
 const providers = new Providers(config);
@@ -33,7 +42,7 @@ jobs.register("kling", "kling", async (job, { setProgress }) => {
   setProgress("正在提交可灵生成任务（可能需要几分钟）", 15);
   const result = await providers.generateKling(job.payload);
   setProgress("正在回存生成结果", 90);
-  result.localUrl = await tryDownloadFirstWork(result.works, job.id);
+  result.localUrl = await tryDownloadFirstWork(result.works, job.id, job.owner);
   return result;
 });
 
@@ -42,7 +51,8 @@ jobs.register("jimeng", "jimeng", async (job, { setProgress }) => {
   const workDir = ensureDir(path.join(config.uploadDir, "jimeng", job.id));
   const result = await providers.generateJimeng(job.payload, workDir);
   setProgress("正在回存生成结果", 90);
-  result.localUrl = await tryDownloadFirstWork(result.works, job.id);
+  result.localUrl = await tryDownloadFirstWork(result.works, job.id, job.owner);
+  cleanupDir(workDir);
   return result;
 });
 
@@ -56,7 +66,7 @@ jobs.register("edit", "edit", async (job, { setProgress }) => {
   const references = await saveMediaInputs(payload.referenceVideos || [], workDir, "reference", mediaOptions);
   if (!clips.length) throw httpError(400, "请先上传至少一个素材视频，或先生成一个视频结果。");
 
-  const outputDir = ensureDir(path.join(config.outputDir, "edit"));
+  const outputDir = ensureDir(path.join(userOutputDir(job.owner), "edit"));
   const output = path.join(outputDir, `${job.id}.mp4`);
   const resolution = payload.ratio === "16:9" ? "1920x1080" : payload.ratio === "1:1" ? "1080x1080" : "1080x1920";
   const options = {
@@ -86,6 +96,7 @@ jobs.register("edit", "edit", async (job, { setProgress }) => {
     result = await media.stitch(options);
   }
 
+  cleanupDir(workDir); // 清掉本次剪辑的中间产物（归一化/转场临时文件），避免磁盘被吃满
   return {
     ok: true,
     provider: engine,
@@ -105,7 +116,7 @@ async function runCodex(job, setProgress) {
   return { ok: true, analysis: result.analysis };
 }
 
-async function tryDownloadFirstWork(works, jobId) {
+async function tryDownloadFirstWork(works, jobId, owner) {
   try {
     const first = (works || [])[0] || {};
     const url = first.url || first.url_without_watermark || first.resource_url || "";
@@ -113,7 +124,7 @@ async function tryDownloadFirstWork(works, jobId) {
     const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
     if (!response.ok) return "";
     const buffer = Buffer.from(await response.arrayBuffer());
-    const dir = ensureDir(path.join(config.outputDir, "generated"));
+    const dir = ensureDir(path.join(userOutputDir(owner), "generated"));
     const filePath = path.join(dir, `${jobId}.mp4`);
     fs.writeFileSync(filePath, buffer);
     return toPublicOutput(filePath);
@@ -125,6 +136,23 @@ async function tryDownloadFirstWork(works, jobId) {
 function toPublicOutput(filePath) {
   const relative = path.relative(config.outputDir, filePath).replace(/\\/g, "/");
   return "/outputs/" + relative.split("/").map(encodeURIComponent).join("/");
+}
+
+// 成品按属主分目录存放：data/outputs/<用户>/...，配合 /outputs 服务时的属主校验做隔离。
+function safeUserSegment(username) {
+  return String(username || "unknown").replace(/[^\w一-龥.-]+/g, "_") || "unknown";
+}
+
+function userOutputDir(username) {
+  return path.join(config.outputDir, safeUserSegment(username));
+}
+
+function cleanupDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // 忽略清理失败
+  }
 }
 
 // ---------------- HTTP 服务 ----------------
@@ -141,7 +169,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function route(req, res) {
-  const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+  const rawPath = (req.url || "/").split("?")[0];
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(rawPath);
+  } catch {
+    // 畸形百分号编码：返回 400 而不是让 URIError 冒泡成 500
+    throw httpError(400, "请求路径编码无效。");
+  }
   const query = new URL(req.url || "/", "http://localhost").searchParams;
 
   if (urlPath === "/api/health") {
@@ -168,7 +203,15 @@ async function route(req, res) {
       res.end();
       return;
     }
-    serveFile(res, config.outputDir, urlPath.replace(/^\/outputs\//, ""));
+    // 属主隔离：普通用户只能访问 /outputs/<自己的用户名>/...；管理员不限。
+    const relative = urlPath.replace(/^\/outputs\//, "");
+    const firstSegment = relative.split("/")[0];
+    if (user.role !== "admin" && firstSegment !== safeUserSegment(user.username)) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+    serveFile(res, config.outputDir, relative);
     return;
   }
 
@@ -274,6 +317,9 @@ async function handleApiRoutes(req, res, urlPath, query, user) {
             baseUrl: config.analysis.baseUrl,
             model: config.analysis.model
           },
+          codex: {
+            enabled: !!config.commands.codexEnabled
+          },
           server: {
             platform: process.platform,
             node: process.version,
@@ -305,6 +351,9 @@ async function handleApiRoutes(req, res, urlPath, query, user) {
     const payload = await readJsonBody(req, { limit: bodyLimit });
     const type = String(payload.type || "");
     if (!JOB_TYPES.has(type)) throw httpError(400, `任务类型无效：${type || "(空)"}`);
+    if (type.startsWith("codex_") && !config.commands.codexEnabled) {
+      throw httpError(403, "Codex 自动分析未启用。请管理员在 config.json 里设置 commands.codexEnabled=true（注意其安全风险）后再用。");
+    }
     const job = jobs.create(type, user.username, payload.payload || {}, {
       title: String(payload.title || "").slice(0, 80)
     });
@@ -373,7 +422,8 @@ async function handleAdminRoutes(req, res, urlPath, actor) {
   const userMatch = urlPath.match(/^\/api\/admin\/users\/([^/]+)(?:\/(password|disable))?$/);
   if (userMatch) {
     const [, rawName, action] = userMatch;
-    const username = decodeURIComponent(rawName);
+    // urlPath 已在 route() 里 decodeURIComponent 过一次，这里直接用，避免二次解码把合法用户名弄坏
+    const username = rawName;
     if (req.method === "POST" && action === "password") {
       const payload = await readJsonBody(req, { limit: 64 * 1024 });
       auth.setPassword(username, payload.password);
@@ -398,19 +448,21 @@ async function handleAdminRoutes(req, res, urlPath, actor) {
 
 // ---------------- 静态资源 ----------------
 
-const PUBLIC_PAGES = new Set(["/login.html", "/styles.css", "/favicon.svg"]);
+// 默认拒绝：除白名单外的一切资源都要求登录。白名单小写匹配，避免 Windows/NTFS 大小写
+// 不敏感文件系统上用 /INDEX.HTML、/Admin.Html 之类绕过鉴权。
+const PUBLIC_ASSETS = new Set(["/login.html", "/styles.css", "/favicon.svg", "/favicon.ico"]);
 
 function serveStatic(req, res, urlPath) {
-  let target = urlPath === "/" ? "/index.html" : urlPath;
+  const target = urlPath === "/" ? "/index.html" : urlPath;
+  // 去掉结尾的点/空格（Windows 会忽略它们从而命中真实文件），再统一小写比对白名单
+  const normalized = target.replace(/[.\s]+$/, "").toLowerCase() || target.toLowerCase();
 
-  if (target.endsWith(".html") || target === "/index.html") {
-    if (!PUBLIC_PAGES.has(target)) {
-      const user = auth.sessionUser(req);
-      if (!user) {
-        res.writeHead(302, { Location: "/login.html" });
-        res.end();
-        return;
-      }
+  if (!PUBLIC_ASSETS.has(normalized)) {
+    const user = auth.sessionUser(req);
+    if (!user) {
+      res.writeHead(302, { Location: "/login.html" });
+      res.end();
+      return;
     }
   }
 
@@ -436,7 +488,12 @@ function serveFile(res, baseDir, relativePath) {
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "X-Content-Type-Options": "nosniff"
     });
-    fs.createReadStream(filePath).pipe(res);
+    // pipeline 在源流出错或客户端提前断开时销毁两端，避免未捕获 error 崩进程、以及 fd 泄漏
+    pipeline(fs.createReadStream(filePath), res, (error) => {
+      if (error && error.code !== "ERR_STREAM_PREMATURE_CLOSE" && error.code !== "ECONNRESET") {
+        console.error(`[serveFile] ${filePath}: ${error.message}`);
+      }
+    });
   });
 }
 
