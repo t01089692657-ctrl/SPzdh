@@ -12,9 +12,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem 缺少随包 ffmpeg 时（如拿到的是精简代码包），首次启动自动联网补装
+if not exist "deps\bin\win32-x64\ffmpeg.exe" (
+  where ffmpeg >nul 2>nul
+  if errorlevel 1 (
+    echo 未检测到 ffmpeg，正在自动下载（首次启动需联网，约 1-2 分钟）...
+    call "deps\get-ffmpeg.bat" </nul
+  )
+)
+
 echo AI 视频创作平台正在启动...
 echo 启动后请看下方提示的“局域网访问”地址，发给同事即可使用。
-echo 初始管理员账号：admin / admin123 （请登录后立即修改密码）
+echo 初始管理员密码会打印在下方（也存在 data\初始管理员密码.txt）。
 echo.
 node server.js
 pause
