@@ -35,6 +35,42 @@ const jobs = new Jobs(config);
 
 const JOB_TYPES = new Set(["kling", "jimeng", "edit", "codex_reference", "codex_product"]);
 let statusCache = { at: 0, data: null };
+let statusInFlight = null;
+
+async function buildStatus(force) {
+  const [engines, caps] = await Promise.all([
+    providers.detectStatus(),
+    media.detectCapabilities(force)
+  ]);
+  return {
+    at: Date.now(),
+    data: {
+      engines,
+      media: {
+        available: caps.available,
+        version: caps.version,
+        source: caps.ffmpegSource,
+        ffprobe: !!caps.ffprobe,
+        xfade: caps.xfade,
+        openMontage: media.openMontageAvailable()
+      },
+      analysis: {
+        configured: !!config.analysis.apiKey,
+        baseUrl: config.analysis.baseUrl,
+        model: config.analysis.model
+      },
+      codex: {
+        enabled: !!config.commands.codexEnabled
+      },
+      server: {
+        platform: process.platform,
+        node: process.version,
+        host: config.host,
+        port: config.port
+      }
+    }
+  };
+}
 
 // ---------------- 任务执行器 ----------------
 
@@ -49,62 +85,70 @@ jobs.register("kling", "kling", async (job, { setProgress }) => {
 jobs.register("jimeng", "jimeng", async (job, { setProgress }) => {
   setProgress("正在提交即梦生成任务（可能需要几分钟）", 15);
   const workDir = ensureDir(path.join(config.uploadDir, "jimeng", job.id));
-  const result = await providers.generateJimeng(job.payload, workDir);
-  setProgress("正在回存生成结果", 90);
-  result.localUrl = await tryDownloadFirstWork(result.works, job.id, job.owner);
-  cleanupDir(workDir);
-  return result;
+  try {
+    const result = await providers.generateJimeng(job.payload, workDir);
+    setProgress("正在回存生成结果", 90);
+    result.localUrl = await tryDownloadFirstWork(result.works, job.id, job.owner);
+    return result;
+  } finally {
+    // 无论成功失败都清掉上传的素材临时目录，避免失败任务残留把迷你主机磁盘吃满
+    cleanupDir(workDir);
+  }
 });
 
 jobs.register("edit", "edit", async (job, { setProgress }) => {
   const payload = job.payload || {};
   const workDir = ensureDir(path.join(config.uploadDir, "edit", job.id));
-  setProgress("正在接收素材", 5);
-  const mediaOptions = { outputDir: config.outputDir, localHosts: localOutputHosts() };
-  const clipItems = [...(payload.clips || []), ...(payload.generatedVideos || [])];
-  const clips = await saveMediaInputs(clipItems, workDir, "clip", mediaOptions);
-  const references = await saveMediaInputs(payload.referenceVideos || [], workDir, "reference", mediaOptions);
-  if (!clips.length) throw httpError(400, "请先上传至少一个素材视频，或先生成一个视频结果。");
+  try {
+    setProgress("正在接收素材", 5);
+    const mediaOptions = { outputDir: config.outputDir, localHosts: localOutputHosts(), ownerSegment: safeUserSegment(job.owner) };
+    const clipItems = [...(payload.clips || []), ...(payload.generatedVideos || [])];
+    const clips = await saveMediaInputs(clipItems, workDir, "clip", mediaOptions);
+    const references = await saveMediaInputs(payload.referenceVideos || [], workDir, "reference", mediaOptions);
+    if (!clips.length) throw httpError(400, "请先上传至少一个素材视频，或先生成一个视频结果。");
 
-  const outputDir = ensureDir(path.join(userOutputDir(job.owner), "edit"));
-  const output = path.join(outputDir, `${job.id}.mp4`);
-  const resolution = payload.ratio === "16:9" ? "1920x1080" : payload.ratio === "1:1" ? "1080x1080" : "1080x1920";
-  const options = {
-    clips: clips.map((item) => item.path),
-    reference: references[0]?.path || "",
-    output,
-    transition: payload.transition || "crossfade",
-    transitionDuration: Number(payload.transitionDuration || 0.35),
-    resolution,
-    workDir,
-    onProgress: setProgress
-  };
+    const outputDir = ensureDir(path.join(userOutputDir(job.owner), "edit"));
+    const output = path.join(outputDir, `${job.id}.mp4`);
+    const resolution = payload.ratio === "16:9" ? "1920x1080" : payload.ratio === "1:1" ? "1080x1080" : "1080x1920";
+    const options = {
+      clips: clips.map((item) => item.path),
+      reference: references[0]?.path || "",
+      output,
+      transition: payload.transition || "crossfade",
+      transitionDuration: Number(payload.transitionDuration || 0.35),
+      resolution,
+      workDir,
+      onProgress: setProgress
+    };
 
-  let result;
-  let engine = "builtin-ffmpeg";
-  if (config.editor.preferOpenMontage && media.openMontageAvailable()) {
-    setProgress("正在调用 OpenMontage 剪辑", 20);
-    try {
-      result = await media.stitchWithOpenMontage(options);
-      engine = "openmontage";
-    } catch (error) {
-      setProgress("OpenMontage 失败，切换内置 ffmpeg 引擎", 25);
+    let result;
+    let engine = "builtin-ffmpeg";
+    if (config.editor.preferOpenMontage && media.openMontageAvailable()) {
+      setProgress("正在调用 OpenMontage 剪辑", 20);
+      try {
+        result = await media.stitchWithOpenMontage(options);
+        engine = "openmontage";
+      } catch (error) {
+        setProgress("OpenMontage 失败，切换内置 ffmpeg 引擎", 25);
+        result = await media.stitch(options);
+        result.notes = [`OpenMontage 执行失败（${error.message}），已改用内置 ffmpeg 引擎。`, ...(result.notes || [])];
+      }
+    } else {
       result = await media.stitch(options);
-      result.notes = [`OpenMontage 执行失败（${error.message}），已改用内置 ffmpeg 引擎。`, ...(result.notes || [])];
     }
-  } else {
-    result = await media.stitch(options);
-  }
 
-  cleanupDir(workDir); // 清掉本次剪辑的中间产物（归一化/转场临时文件），避免磁盘被吃满
-  return {
-    ok: true,
-    provider: engine,
-    url: toPublicOutput(output),
-    duration: result.duration,
-    transition: result.transition,
-    notes: result.notes || []
-  };
+    return {
+      ok: true,
+      provider: engine,
+      url: toPublicOutput(output),
+      duration: result.duration,
+      transition: result.transition,
+      notes: result.notes || []
+    };
+  } finally {
+    // 成功/失败都清中间产物（源素材、归一化、转场临时文件），避免磁盘被吃满
+    cleanupDir(workDir);
+  }
 });
 
 jobs.register("codex_reference", "codex", (job, { setProgress }) => runCodex(job, setProgress));
@@ -113,6 +157,9 @@ jobs.register("codex_product", "codex", (job, { setProgress }) => runCodex(job, 
 async function runCodex(job, setProgress) {
   setProgress("Codex 正在分析素材（可能需要几分钟）", 20);
   const result = await providers.runCodexJob(job.id, job.type, job.payload || {});
+  // 成功后清掉该 Codex 任务目录（素材/日志/中间文件），避免 data/codex-jobs 无限增长。
+  // 失败时保留目录，便于管理员查看 codex-stderr.log 排查。
+  cleanupDir(path.join(config.codexJobDir, job.id));
   return { ok: true, analysis: result.analysis };
 }
 
@@ -203,13 +250,22 @@ async function route(req, res) {
       res.end();
       return;
     }
-    // 属主隔离：普通用户只能访问 /outputs/<自己的用户名>/...；管理员不限。
+    // 属主隔离：先把路径归一化解析出真实文件位置，再判断它是否落在“该用户的目录”内。
+    // 只比对 URL 字面首段是不够的——/outputs/自己/../别人/... 归一化后会跳进别人目录却通过字面校验。
     const relative = urlPath.replace(/^\/outputs\//, "");
-    const firstSegment = relative.split("/")[0];
-    if (user.role !== "admin" && firstSegment !== safeUserSegment(user.username)) {
+    const resolved = safeChildPath(config.outputDir, relative);
+    if (!resolved) {
       res.writeHead(403);
       res.end("Forbidden");
       return;
+    }
+    if (user.role !== "admin") {
+      const userDir = path.join(config.outputDir, safeUserSegment(user.username));
+      if (resolved !== userDir && !resolved.startsWith(userDir + path.sep)) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
     }
     serveFile(res, config.outputDir, relative);
     return;
@@ -266,8 +322,10 @@ async function handleAuthRoutes(req, res, urlPath) {
     const user = auth.sessionUser(req);
     if (!user) throw httpError(401, "请先登录。");
     const payload = await readJsonBody(req, { limit: 64 * 1024 });
-    const check = auth.login(user.username, payload.oldPassword, req.socket.remoteAddress || "unknown");
-    auth.logout(check.token);
+    // 已登录用户改密：用非限流的凭据校验，避免输错旧密码把自己的 IP 计入登录失败限流被锁在门外
+    if (!auth.verifyCredential(user.username, payload.oldPassword)) {
+      throw httpError(401, "当前密码不正确。");
+    }
     auth.setPassword(user.username, payload.newPassword);
     const fresh = auth.login(user.username, payload.newPassword, req.socket.remoteAddress || "unknown");
     setSessionCookie(res, fresh.token);
@@ -296,38 +354,12 @@ async function handleApiRoutes(req, res, urlPath, query, user) {
   if (urlPath === "/api/status" && req.method === "GET") {
     const force = query.get("refresh") === "1";
     if (!statusCache.data || force || Date.now() - statusCache.at > 60_000) {
-      const [engines, caps] = await Promise.all([
-        providers.detectStatus(),
-        media.detectCapabilities(force)
-      ]);
-      statusCache = {
-        at: Date.now(),
-        data: {
-          engines,
-          media: {
-            available: caps.available,
-            version: caps.version,
-            source: caps.ffmpegSource,
-            ffprobe: !!caps.ffprobe,
-            xfade: caps.xfade,
-            openMontage: media.openMontageAvailable()
-          },
-          analysis: {
-            configured: !!config.analysis.apiKey,
-            baseUrl: config.analysis.baseUrl,
-            model: config.analysis.model
-          },
-          codex: {
-            enabled: !!config.commands.codexEnabled
-          },
-          server: {
-            platform: process.platform,
-            node: process.version,
-            host: config.host,
-            port: config.port
-          }
-        }
-      };
+      // single-flight：并发/连点刷新时只跑一次检测，其余请求复用同一个进行中的 Promise，
+      // 否则每个请求都会 spawn kling/dreamina/codex 探测子进程，形成子进程风暴拖垮迷你主机。
+      if (!statusInFlight) {
+        statusInFlight = buildStatus(force).finally(() => { statusInFlight = null; });
+      }
+      statusCache = await statusInFlight;
     }
     sendJson(res, 200, { ok: true, ...statusCache.data, queues: jobs.queueSummary() });
     return;
@@ -354,7 +386,7 @@ async function handleApiRoutes(req, res, urlPath, query, user) {
     if (type.startsWith("codex_") && !config.commands.codexEnabled) {
       throw httpError(403, "Codex 自动分析未启用。请管理员在 config.json 里设置 commands.codexEnabled=true（注意其安全风险）后再用。");
     }
-    const job = jobs.create(type, user.username, payload.payload || {}, {
+    const job = await jobs.create(type, user.username, payload.payload || {}, {
       title: String(payload.title || "").slice(0, 80)
     });
     sendJson(res, 200, { ok: true, job });

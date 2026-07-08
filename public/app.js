@@ -494,9 +494,11 @@ function makeVideoPrompt(scriptText, useImages) {
     `Style: ${$("style").value}.`,
     `Digital human/persona: ${$("avatarPersona").value.trim() || "professional presenter"}.`,
     `Product information: ${$("productInfo").value.trim()}.`,
-    // 只有真正会把图片喂给模型的引擎(即梦多模态)才在 prompt 里声称使用了图片
+    // 只有真正会把素材喂给模型的引擎(即梦多模态)才在 prompt 里声称使用；
+    // 参考素材只有“视频”类型才会随请求发送（callRealEngine 里 referenceVideos 仅 video 才带），
+    // 参考图片不发，故不声称，避免 prompt 谎称用了参考图。
     useImages && state.productImages.length ? `Use ${state.productImages.length} uploaded product images as product visual references.` : "",
-    useImages && state.referenceFiles.length ? `Use uploaded reference material for pacing and structure. Type: ${state.referenceKind}.` : "",
+    useImages && state.referenceKind === "video" && state.referenceFiles.length ? `Use the uploaded reference video for pacing and structure.` : "",
     "Avoid fake logos, unreadable text, deformed faces or hands.",
     "Script:",
     scriptText
@@ -773,7 +775,10 @@ async function startGeneration() {
   }
   $("startBtn").disabled = true;
   $("result").innerHTML = `<div class="empty-video"><svg class="clap" viewBox="0 0 100 86" aria-hidden="true"><path fill="currentColor" d="M18 25h64a6 6 0 0 1 6 6v43a6 6 0 0 1-6 6H18a6 6 0 0 1-6-6V31a6 6 0 0 1 6-6Zm26 16v24l20-12-20-12ZM19 9l62-8 3 18-62 8-3-18Z"/></svg><div>正在生成...</div></div>`;
-  for (const [label, value] of stages) {
+  // 真实生成后面还有几分钟实际进度，预热动画只走到 84%，避免先冲到 100% 再跳回 88% 的观感 bug；
+  // 本地模拟是瞬时的，走完整动画到 100% 没问题。
+  const preStages = engine === "mock" ? stages : stages.filter(([, value]) => value < 88);
+  for (const [label, value] of preStages) {
     setProgress(label, value);
     await sleep(320);
   }
